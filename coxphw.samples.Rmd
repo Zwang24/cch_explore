@@ -1,0 +1,44 @@
+---
+title: "Summary of the coxphw package"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(coxphw)
+```
+# Summary of various methods to deal with non-proportional hazards
+The Cox's proportional hazards regression is one of the most popular method of analysis when dealing with survival data. However, the classical method assumes the proportional hazards in unchange over time, thus violating real world situations sometimes. As a result, the relative risk of a covariate exhibiting non-proportional hazards obtained by Cox regression may be under- or overestimated. The non-proportionality is acceptable if the sign of the log hazard ratio estimate remains unchanged throughout the follow-up. While estimating from Cox regression ignoring non-proportionality were shown to be sensitive to the type of depature from proportionality and the censoring pattern of the data.
+There are three methods to deal with non-proportional hazard ratio, either stratification, estimating an "extended Cox regression" where some coefficients are allowed to vary with time, or by using weight Cox regression. Stratification is applicable when only one categorical covariate with a small number of distinct categories which is not of primary interest shows non-proportional hazards. In this case the type of time-dependent effect does not have to the specified, while there is no way of examing the effect of stratification.
+Estimating piecewise constant HRs is suitable if one assumes that a covariate of primary interest has different short-term and long-ter, effects. Such an analysis is base on the assumptions of constant HRs within each period and a sudden change at a pre-specified cutpoint.
+More generally, Cox regression can be extended to accommodate different types of non-proportional hazards by including an interaction of a covariate with time. To achieve this goal, we need a time-dependent covariate, which is a product of the value of a covariate with a prespecified function of time t, gamma(t). The time function gamma(t) could be a linear time-dependent effect, t, or log(t) that yield a log-linear time-dependent effect. Significant regression coefficient for these interaction terms suggest that the respective covariate does not exhibit proportional hazards. This option of anlysis is the most flexiable, but only useful with larger sample sizes and if a concise description of the time-dependent effect is of interest.
+Weighted Cox regression can account for time-dependent effects applicable also for small samples sizes. At each event time, the weighting function is proportional to the expected number of subjects at risk if censoring had not occurred. In the descriptive statistics, such as plot of cumulative survival probability (KM curves) and plot of scaled Schoenfeld residuals curve, there are signs of existence of non-proportional hazard. In a KM curves of two groups, if the survival curves has crossing, that can indicate non-proportional hazard. In a Schoenfeld curve, any depature of the generated LOWESS curve from the horizontal line can be used to detect non-proportionality.
+# Details about the package
+```{r}
+#coxphw(formula, data, template = c("AHR", "ARE", "PH"), subset, na.action,
+#      robust = TRUE, jack = FALSE, betafix = NULL, alpha = 0.05,
+#       trunc.weights = 1, control, caseweights, x = TRUE, y = TRUE,
+#       verbose = FALSE, sorted = FALSE, id = NULL, clusterid = NULL, ...)
+## robust convariance matrix is the default. 
+## for weighting method, AHR is the default. AHR stands for average HRs, ARE stands for average regression effects, and PH is the unweighted cox proportional hazards regression
+```
+
+## Sample code
+```{r}
+data("gastric")
+## ignoring non-proportionality
+coxphw(Surv(yrs, status) ~ radiation, data = gastric, template = "PH")
+#vs
+coxph(Surv(yrs, status) ~ radiation + tt(radiation) + cluster(id),
+   tt = function(x, t, ...) x * t, data = gastric)
+## including time-by-covariate interaction
+fun <- function(t) as.numeric(t > 1)
+gastric$yrs <- gastric$time/365
+coxphw(Surv(yrs, status) ~ radiation + fun(yrs):radiation,
+       data = gastric, template = "PH")
+coxph(Surv(yrs, status) ~ radiation + tt(radiation) + cluster(id),
+      tt = function(x, t, ...) x * (t > 1), data = gastric,   method = "breslow")
+
+```
+
+
