@@ -1,0 +1,365 @@
+---
+title: "compare.covariates"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,eval=T)
+load("/Users/marcy/Downloads/SimulatedHIVPrevTrial_V2.Rdata")
+library(survival)
+install.packages("misc")
+library(misc)
+library(ggplot2)
+install.packages("mvtnorm")
+```
+
+## Sampling within the stratum -- baseline age as covariate
+```{r, eval=FALSE}
+sim.trial$time <- sim.trial$last.fu.day - sim.trial$enroll.day
+surobj <- Surv(sim.trial$length, sim.trial$hiv.infection)
+logit1 <- regress("odds", hiv.infection~age, data=sim.trial)
+prob.ind <- function(age) { ## get the probability of infection for an individual of certain age
+  alpha = logit1$coefficients[1]
+  beta = logit1$coefficients[2]
+  f = exp(alpha+beta*age)/(1+exp(alpha+beta*age))
+  f
+}
+sub.n <- 250
+results <- rep(NA,2500)
+p.sel <- rep(NA,2500)
+ for (i in 1:2500) {
+## get the probabilities of infection for all individuals in the dataset
+   results[i] <- prob.ind(sim.trial$age[i])
+ }
+full.co.sum <- sum(results)
+for (i in 1:2500){ 
+## the probability of an individual selected to the subcohort in a subcohort size of n=250
+   p.sel[i] <- 250*results[i]/full.co.sum
+}
+
+sim.trial$age.prob <- p.sel
+age.sel.subco <- rep(NA,2500)
+for (i in 1:2500) {
+## random sampling based on the obtained probability, no fixed subcohort size
+  age.sel.subco[i] <- rbinom(1,1, sim.trial$age.prob[i])
+}
+sim.trial$age.sel.subco <- age.sel.subco
+```
+
+##SRS
+```{r}
+srs <- function(n) {
+sim.trial$sub.sel.srs <- sample(c(rep(1, 250), rep(0, 2500-250)), size = 2500, replace = FALSE)
+srs.subcoh <- sim.trial$sub.sel.srs
+srs.selccoh <- with(sim.trial, hiv.infection==1|srs.subcoh==1) 
+# creating the subcohort dataset from the full cohort dataset
+srs.sim.subco <- sim.trial[srs.selccoh,]
+srs.sim.subco$sucohort <- srs.subcoh[srs.selccoh]
+subcohort <- srs.sim.subco$sucohort
+# run subcohort analysis using the cch function with Prentice method
+srs.fit <- cch(Surv(time, hiv.infection) ~ int+age+factor(site), data =srs.sim.subco,
+   subcoh = ~subcohort, id=~ptid, cohort.size=2500, method="Prentice")
+srs.fit$var[1] ## get the variance
+}
+## run 100 replicates for each subcohort size n
+srs.100 <- function(n) {
+  replicate(100, srs(n))
+}
+## getting the average
+cchmean <- function(n){
+a <- srs.100(n)
+sum(a)/100
+}
+## getting the standard error
+cchse <- function(n){
+  a <- srs.100(n)
+  sd(a)/sqrt(n)
+}
+cchmean(300)
+cchse(300)
+```
+
+## Wrap the above code into a function of subcohort size n
+```{r}
+## run the logistic regression of age
+logit1 <- glm(hiv.infection~age, data=sim.trial, family = "binomial")
+## use the original method posted in the MORGAM paper to get the probability of getting infection
+prob.ind <- function(age) {
+  ## obtain the intercept coefficient
+  alpha = logit1$coefficients[1] 
+  ## obtain the slope coefficient
+  beta = logit1$coefficients[2] 
+  ## plug in the coefficients to get the probability
+  f = exp(alpha+beta*age)/(1+exp(alpha+beta*age)) 
+}
+## wrap the whole process into a function
+age.fuc <- function(n) {
+  results <- rep(NA,2500)
+p.sel <- rep(NA,2500)
+for (i in 1:2500) { 
+## the loop to obtain probabilities for each individual in the dataset
+   results[i] <- prob.ind(sim.trial$age[i])
+ }
+full.co.sum <- sum(results)
+for (i in 1:2500){
+## the probability of an individual selected to the subcohort in a subcohort size of n
+   p.sel[i] <- n*results[i]/full.co.sum
+}
+sim.trial$age.prob <- p.sel
+## use the sample function to obtain the desired subcohort size
+sim.trial$sub.sel <- sample(c(rep(1, n), rep(0, 2500-n)), 
+size = 2500, prob = sim.trial$age.prob[1:2500], replace = FALSE)
+age.subcoh <- sim.trial$sub.sel
+age.selccoh <- with(sim.trial, hiv.infection==1|sub.sel==1)
+# creating the subcohort dataset from the full cohort dataset
+age.sim.subco <- sim.trial[age.selccoh,]
+# run subcohort analysis using the cch function with the original prentice method
+age.fit <- cch(Surv(time, hiv.infection) ~ int+age+factor(site), data =age.sim.subco,
+   subcoh = ~ sub.sel, id=~ptid, cohort.size=2500, method="Prentice")
+age.fit$var[1] ## obtain the variance
+}
+age.fuc(300)
+## run 100 replicates for each subcohort size n
+age.fuc.100 <- function(n) {
+  replicate(100, age.fuc(n))
+}
+## getting the average
+age.cchmean <- function(n){
+a <-age.fuc.100(n)
+sum(a)/100
+}
+## getting the standard error
+age.cchse <- function(n){
+  a <- age.fuc.100(n)
+  sd(a)/sqrt(n)
+}
+age.cchmean(300)
+age.cchse(300)
+```
+## logistic regression for site
+```{r}
+## run the logistic regression for site as predictor of interest
+logit2 <- glm(hiv.infection~factor(site), data=sim.trial, family = "binomial")
+## use the predict function with type="response" to get the predicted probabilities
+sim.trial$site.prob <- predict(logit2, newdata = sim.trial, type = "response")
+sum.site <- sum(sim.trial$site.prob)
+site.sel <- rep(NA,2500)
+##the function
+site.fuc <- function(n) {
+for (i in 1:2500){
+   site.sel[i] <- n*sim.trial$site.prob[i]/sum.site
+}
+sim.trial$site.prob <- site.sel
+sim.trial$sub.sel.site <- sample(c(rep(1, n), rep(0, 2500-n)), size = 2500,
+prob = sim.trial$age.prob[1:2500], replace = FALSE)
+site.subcoh <- sim.trial$sub.sel.site
+site.selccoh <- with(sim.trial, hiv.infection==1|sub.sel.site==1) ## cases in the subcohort
+# creating the subcohort dataset from the full cohort dataset
+site.sim.subco <- sim.trial[site.selccoh,]
+# run subcohort analysis using the cch function with Prentice method
+site.fit <- cch(Surv(time, hiv.infection) ~ int+age+factor(site), data =site.sim.subco,
+   subcoh = ~sub.sel.site, id=~ptid, cohort.size=2500, method="Prentice")
+site.fit$var[1] ## get the variance
+}
+site.fuc(300)
+## run 100 replicates for each subcohort size n
+site.fuc.100 <- function(n) {
+  replicate(100, site.fuc(n))
+}
+
+## getting the average
+site.cchmean <- function(n){
+a <-site.fuc.100(n)
+sum(a)/100
+}
+## getting the standard error
+site.cchse <- function(n){
+  a <- site.fuc.100(n)
+  sd(a)/sqrt(n)
+}
+site.cchmean(300)
+site.cchse(300)
+```
+## logistic regression for age and site
+```{r}
+## run the logistic regession for both age and site(factor)
+logit3 <- glm(hiv.infection~age+factor(site), data=sim.trial, family = "binomial")
+sim.trial$both.prob <- predict(logit3, newdata = sim.trial, type = "response")
+sum.both <- sum(sim.trial$both.prob)
+both.sel <- rep(NA,2500)
+##the function
+set.seed(1)
+both.fuc <- function(n) {
+for (i in 1:2500){
+   both.sel[i] <- n*sim.trial$both.prob[i]/sum.both
+}
+sim.trial$both.prob <- both.sel
+sim.trial$sub.sel.both <- sample(c(rep(1, n), rep(0, 2500-n)), 
+size = 2500, prob = sim.trial$both.prob[1:2500], replace = FALSE)
+both.subcoh <- sim.trial$sub.sel.both
+both.selccoh <- with(sim.trial, hiv.infection==1|sub.sel.both==1)
+# creating the subcohort dataset from the full cohort dataset
+both.sim.subco <- sim.trial[both.selccoh,]
+# run subcohort analysis using the cch function with Prentice method
+both.fit <- cch(Surv(time, hiv.infection) ~ int+age+factor(site), data =both.sim.subco,
+   subcoh = ~sub.sel.both, id=~ptid, cohort.size=2500, method="Prentice")
+both.fit$var[1]
+}
+both.fuc(300)
+## run 100 replicates for each subcohort size n
+both.fuc.100 <- function(n) {
+  replicate(100, both.fuc(n))
+}
+
+## getting the average
+both.cchmean <- function(n){
+a <-both.fuc.100(n)
+sum(a)/100
+}
+## getting the standard error
+both.cchse <- function(n){
+  a <- both.fuc.100(n)
+  sd(a)/sqrt(n)
+}
+both.cchmean(300)
+both.cchse(300)
+```
+## graph the subcohort size vs. variances plot
+```{r}
+nset <- seq(100, 1000, 10)
+age.varset <- lapply(nset, age.fuc)
+site.varset <- lapply(nset, site.fuc)
+both.varset <- lapply(nset, both.fuc)
+srs.varset <- lapply(nset, srs)
+## convert the variance sets into numeric vectors
+age.varset <- as.numeric(age.varset)
+site.varset <- as.numeric(site.varset)
+both.varset <- as.numeric(both.varset)
+srs.varset <- as.numeric(srs.varset)
+var.table <- data.frame(nset,site.varset,age.varset,srs.varset#,both.varset
+                        )
+## ggplot
+ggplot() + 
+geom_line(data = var.table, aes(x = nset, y = age.varset, colour="age"), 
+          position=position_dodge(w=0.02)) +
+ geom_line(data = var.table, aes(x = nset, y = site.varset, colour = "site")) +
+geom_line(data = var.table, aes(x = nset, y = both.varset, colour = "both"),
+          position=position_dodge(w=0.02)) +
+  geom_line(data = var.table, aes(x = nset, y = srs.varset, colour = "srs"),
+            position=position_dodge(w=0.02)) +
+  scale_colour_manual("", 
+                      values = c("age"="green", "site"="blue", "both"="red", "srs"="yellow")) +
+  xlab('subcohort size') +
+  ylab('variances')
+
+## smoonthed lines
+ggplot() + 
+geom_smooth(data = var.table, aes(x = nset, y = age.varset, colour="age"), span=0.1) +
+ geom_smooth(data = var.table, aes(x = nset, y = site.varset, colour = "site"), span=0.1) +
+geom_smooth(data = var.table, aes(x = nset, y = both.varset, colour = "both"), span=0.1) +
+  geom_smooth(data = var.table, aes(x = nset, y = srs.varset, colour = "srs"), span=0.1) +
+  scale_colour_manual("", 
+                      values = c("age"="green", "site"="blue", "both"="red", "srs"="yellow")) +
+  xlab('subcohort size') +
+  ylab('variances') +
+ ggtitle("subcohort size (100-1000) vs. variances")
+```
+## for 100 replicates
+```{r}
+nset.1 <- seq(200, 600, 50)
+age.varset.100 <- as.numeric(lapply(nset.1, age.cchmean))
+age.sd.100 <- as.numeric(lapply(nset.1, age.cchse))
+srs.varset.100 <- as.numeric(lapply(nset.1, cchmean))
+srs.sd.100 <- as.numeric(lapply(nset.1, cchse))
+site.varset.100 <- as.numeric(lapply(nset.1, site.cchmean))
+site.sd.100 <- as.numeric(lapply(nset.1, site.cchse))
+both.varset.100 <- as.numeric(lapply(nset.1, both.cchmean))
+both.sd.100 <- as.numeric(lapply(nset.1, both.cchse))
+tb <- data.frame(nset.1,age.varset.100, age.sd.100, 
+srs.varset.100, srs.sd.100, site.varset.100, site.sd.100, both.varset.100, both.sd.100)
+
+ggplot(data=tb, aes(x=nset.1, y=age.varset.100, colour="age"),position=position_dodge(w=20)) + 
+geom_errorbar(data=tb, aes(ymin=age.varset.100-age.sd.100, ymax=age.varset.100+age.sd.100), width=20,position=position_dodge(w=0.2)) +
+geom_line(data = tb, aes(x = nset.1, y = srs.varset.100, colour="srs")) +
+geom_errorbar(data=tb, aes(ymin=srs.varset.100-srs.sd.100, ymax=srs.varset.100+srs.sd.100), width=20) +
+geom_line(data = tb, aes(x = nset.1, y = site.varset.100, colour="site"),position=position_dodge(w=20)) +
+geom_errorbar(data=tb, aes(ymin=site.varset.100-site.sd.100, ymax=site.varset.100+site.sd.100), width=20)+
+geom_line(data = tb, aes(x = nset.1, y = both.varset.100, colour="both")) +
+geom_errorbar(data=tb, aes(ymin=both.varset.100-both.sd.100, ymax=both.varset.100+both.sd.100), width=20) +
+     xlab('subcohort size') +
+  ylab('variances') +
+  ggtitle("subcohort size (200-600) vs. variances (100 replicas)")
+```
+## Relative efficiency graph
+```{r}
+full.fit <- coxph(Surv(time, hiv.infection)~int+age+factor(site), data=sim.trial)
+ori.var <- full.fit$var[1]
+## divide the variances obtained from the full cohort cox regression by the variances of the subcohorts
+age.ef <- ori.var/age.varset
+site.ef <- ori.var/site.varset
+both.ef <- ori.var/both.varset
+srs.ef <- ori.var/srs.varset
+ef.table <- data.frame(nset, age.ef, site.ef, both.ef,srs.ef)
+## plot the smoothed lines
+ggplot() + 
+geom_line(data = ef.table, aes(x = nset, y = age.ef, colour="age"),
+          position=position_dodge(w=0.02)) +
+ geom_line(data = ef.table, aes(x = nset, y = site.ef, colour = "site")) +
+geom_line(data = ef.table, aes(x = nset, y = both.ef, colour = "both"),
+          position=position_dodge(w=0.02)) +
+  geom_line(data = ef.table, aes(x = nset, y = srs.ef, colour = "srs"),
+            position=position_dodge(w=0.02))+
+  scale_colour_manual("", 
+                      values = c("age"="green", "site"="blue", "both"="red","srs"="yellow")) +
+  xlab('subcohort size') +
+  ylab('relative efficiency')
+
+ggplot() + 
+geom_smooth(data = ef.table, aes(x = nset, y = age.ef, colour="age"), span=0.1) +
+ geom_smooth(data = ef.table, aes(x = nset, y = site.ef, colour = "site"), span=0.1) +
+geom_smooth(data = ef.table, aes(x = nset, y = both.ef, colour = "both"), span=0.1) +
+  geom_smooth(data = ef.table, aes(x = nset, y = srs.ef, colour = "srs"), span=0.1) +
+  scale_colour_manual("", 
+                      values = c("age"="green", "site"="blue", "both"="red", "srs"="yellow")) +
+  xlab('subcohort size') +
+  ylab('relative efficiency') +
+ggtitle("subcohort size (100-1000) vs. relative efficiency")
+```
+```{r}
+age.ef.100 <- ori.var/age.varset.100
+site.ef.100 <- ori.var/site.varset.100
+both.ef.100 <- ori.var/both.varset.100
+srs.ef.100 <- ori.var/srs.varset.100
+ef.table.100 <- data.frame(nset.1, age.ef.100, site.ef.100, both.ef.100,srs.ef.100)
+ggplot() + 
+geom_smooth(data = ef.table.100, aes(x = nset.1, y = age.ef.100, colour="age")) +
+ geom_smooth(data = ef.table.100, aes(x = nset.1, y = site.ef.100, colour = "site")) +
+geom_smooth(data = ef.table.100, aes(x = nset.1, y = both.ef.100, colour = "both")) +
+  geom_smooth(data = ef.table.100, aes(x = nset.1, y = srs.ef.100, colour = "srs")) +
+  scale_colour_manual("", 
+                      values = c("age"="green", "site"="blue", "both"="red", "srs"="yellow")) +
+  xlab('subcohort size') +
+  ylab('relative efficiency') +
+   ggtitle("subcohort size (200-600) vs. relative efficiency (100 replicas)")
+
+sim.trial$sub.sel.srs <- sample(c(rep(1, 300), rep(0, 2500-300)), size = 2500, replace = FALSE)
+srs.subcoh <- sim.trial$sub.sel.srs
+srs.selccoh <- with(sim.trial, hiv.infection==1|srs.subcoh==1) 
+# creating the subcohort dataset from the full cohort dataset
+srs.sim.subco <- sim.trial[srs.selccoh,]
+srs.sim.subco$sucohort <- srs.subcoh[srs.selccoh]
+subcohort <- srs.sim.subco$sucohort
+# run subcohort analysis using the cch function with Prentice method
+srs.fit <- cch(Surv(time, hiv.infection) ~ int+age+factor(site), data =srs.sim.subco,
+   subcoh = ~subcohort, id=~ptid, cohort.size=2500, method="Prentice")
+
+
+
+
+
+
+
+
+```
