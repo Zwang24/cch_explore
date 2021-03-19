@@ -1,0 +1,173 @@
+---
+title: "compare.covariates"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(uwIntroStats)
+```
+
+## Sampling within the stratum -- baseline age as covariate
+```{r}
+logit1 <- regress("odds", hiv.infection~age, data=sim.trial)
+prob.ind <- function(age) { ## get the probability of infection for an individual of certain age
+  alpha = logit1$coefficients[1]
+  beta = logit1$coefficients[2]
+  f = exp(alpha+beta*age)/(1+exp(alpha+beta*age))
+  f
+}
+sub.n <- 250
+results <- rep(NA,2500)
+p.sel <- rep(NA,2500)
+ for (i in 1:2500) { ## get the probabilities of infection for all individuals in the dataset
+   results[i] <- prob.ind(sim.trial$age[i])
+ }
+full.co.sum <- sum(results)
+for (i in 1:2500){ ## the probability of an individual selected to the subcohort in a subcohort size of n=250
+   p.sel[i] <- 250*results[i]/full.co.sum
+}
+
+sim.trial$age.prob <- p.sel
+age.sel.subco <- rep(NA,2500)
+for (i in 1:2500) { ## random sampling based on the obtained probability, no fixed subcohort size
+  age.sel.subco[i] <- rbinom(1,1, sim.trial$age.prob[i])
+}
+sim.trial$age.sel.subco <- age.sel.subco
+```
+
+## Wrap the above code into a function of subcohort size n
+```{r}
+## run the logistic regression of age
+logit1 <- regress("odds", hiv.infection~age, data=sim.trial)
+## use the original method posted in the MORGAM paper to get the probability of geting infection
+prob.ind <- function(age) {
+  alpha = logit1$coefficients[1] ## obtain the intercept coefficient
+  beta = logit1$coefficients[2] ## obtain the slope coefficient
+  f = exp(alpha+beta*age)/(1+exp(alpha+beta*age)) ## plug in the coefficients to get the probability
+}
+## wrap the whole process into a function
+age.fuc <- function(n) {
+  results <- rep(NA,2500)
+p.sel <- rep(NA,2500)
+for (i in 1:2500) { ## the loop to obtain probabilities for each individual in the dataset
+   results[i] <- prob.ind(sim.trial$age[i])
+ }
+full.co.sum <- sum(results)
+for (i in 1:2500){ ## the probability of an individual selected to the subcohort in a subcohort size of n
+   p.sel[i] <- n*results[i]/full.co.sum
+}
+sim.trial$age.prob <- p.sel
+sim.trial$sub.sel <- sample(c(rep(1, n), rep(0, 2500-n)), size = 2500, prob = sim.trial$age.prob[1:2500], replace = FALSE) ## use the sample function to obtain the desired subcohort size
+age.subcoh <- sim.trial$sub.sel
+age.selccoh <- with(sim.trial, hiv.infection==1|sub.sel==1) ## cases in the subcohort
+# creating the subcohort dataset from the full cohort dataset
+age.sim.subco <- sim.trial[age.selccoh,]
+# run subcohort analysis using the cch function with the original prentice method
+age.fit <- cch(Surv(last.fu.day, hiv.infection) ~ age, data =age.sim.subco,
+   subcoh = ~sub.sel, id=~ptid, cohort.size=2500, method="Prentice")
+age.fit$var[1] ## obtain the variance
+}
+age.fuc(300)
+```
+## logistic regression for site
+```{r}
+## run the logistic regression for site as predictor of interest
+logit2 <- glm(hiv.infection~factor(site), data=sim.trial, family = "binomial")
+## use the predict function with type="response" to get the predicted probabilities
+sim.trial$site.prob <- predict(logit2, newdata = sim.trial, type = "response")
+sum.site <- sum(site.prob)
+site.sel <- rep(NA,2500)
+##the function
+site.fuc <- function(n) {
+for (i in 1:2500){
+   site.sel[i] <- n*site.prob[i]/sum.site
+}
+sim.trial$site.prob <- site.sel
+sim.trial$sub.sel.site <- sample(c(rep(1, n), rep(0, 2500-n)), size = 2500, prob = sim.trial$age.prob[1:2500], replace = FALSE)
+site.subcoh <- sim.trial$sub.sel.site
+site.selccoh <- with(sim.trial, hiv.infection==1|sub.sel.site==1) ## cases in the subcohort
+# creating the subcohort dataset from the full cohort dataset
+site.sim.subco <- sim.trial[site.selccoh,]
+# run subcohort analysis using the cch function with Prentice method
+site.fit <- cch(Surv(last.fu.day, hiv.infection) ~ age+factor(site), data =site.sim.subco,
+   subcoh = ~sub.sel.site, id=~ptid, cohort.size=2500, method="Prentice")
+site.fit$var[1] ## get the variance
+}
+site.fuc(500)
+```
+## logistic regression for age and site
+```{r}
+## run the logistic regession for both age and site(factor)
+logit3 <- glm(hiv.infection~age+factor(site), data=sim.trial, family = "binomial")
+sim.trial$both.prob <- predict(logit3, newdata = sim.trial, type = "response")
+sum.both <- sum(sim.trial$both.prob)
+both.sel <- rep(NA,2500)
+##the function
+set.seed(1)
+both.fuc <- function(n) {
+for (i in 1:2500){
+   both.sel[i] <- n*sim.trial$both.prob[i]/sum.both
+}
+sim.trial$both.prob <- both.sel
+sim.trial$sub.sel.both <- sample(c(rep(1, n), rep(0, 2500-n)), size = 2500, prob = sim.trial$both.prob[1:2500], replace = FALSE)
+both.subcoh <- sim.trial$sub.sel.both
+both.selccoh <- with(sim.trial, hiv.infection==1|sub.sel.both==1) ## cases in the subcohort
+# creating the subcohort dataset from the full cohort dataset
+both.sim.subco <- sim.trial[both.selccoh,]
+# run subcohort analysis using the cch function with Prentice method
+both.fit <- cch(Surv(last.fu.day, hiv.infection) ~ age+factor(site), data =both.sim.subco,
+   subcoh = ~sub.sel.both, id=~ptid, cohort.size=2500, method="Prentice")
+both.fit$var[1]
+}
+both.fuc(500)
+```
+## graph the subcohort size vs. variances plot
+```{r}
+nset <- seq(30, 1000, 10)
+set.seed(1)
+age.varset <- lapply(nset, age.fuc)
+p.age <- plot(nset, age.varset, xlab= "subcohort size (30-2500)", ylab = "variances", main="Variances vs. subcohort size - baseline age as predictor")
+set.seed(1)
+site.varset <- lapply(nset, site.fuc)
+p.site <- plot(nset, site.varset, xlab= "subcohort size (30-2500)", ylab = "variances", main="Variances vs. subcohort size - site as predictor")
+set.seed(1)
+both.varset <- lapply(nset, both.fuc)
+## convert the variance sets into numeric vectors
+age.varset <- as.numeric(age.varset)
+site.varset <- as.numeric(site.varset)
+both.varset <- as.numeric(both.varset)
+var.table <- data.frame(nset,site.varset,age.varset, both.varset)
+## smoothed lines
+p = ggplot() + 
+geom_smooth(data = var.table, aes(x = nset, y = age.varset, colour="age"), span=0.3, se=FALSE) +
+ geom_smooth(data = var.table, aes(x = nset, y = site.varset, colour = "site"), span=0.3, se=FALSE) +
+  geom_smooth(data = var.table, aes(x = nset, y = both.varset, colour = "both"), span=0.3, se=FALSE) +
+  scale_colour_manual("", 
+                      values = c("age"="green", "site"="blue", 
+                                 "both"="red")) +
+  xlab('subcohort size') +
+  ylab('variances')
+
+```
+## Relative efficiency graph
+```{r}
+full.fit <- coxph(Surv(last.fu.day, hiv.infection)~age+factor(site), data=sim.trial)
+ori.var <- full.fit$var[1]
+## divide the variances obtained from the full cohort cox regression by the variances of the subcohorts
+age.ef <- ori.var/age.varset
+site.ef <- ori.var/site.varset
+both.ef <- ori.var/both.varset
+ef.table <- data.frame(nset, age.ef, site.ef, both.ef)
+## plot the smoothed lines
+p2 = ggplot() + 
+geom_smooth(data = ef.table, aes(x = nset, y = age.ef, colour="age"), span=0.3, se=FALSE) +
+ geom_smooth(data = ef.table, aes(x = nset, y = site.ef, colour = "site"), span=0.3, se=FALSE) +
+  geom_smooth(data = ef.table, aes(x = nset, y = both.ef, colour = "both"), span=0.3, se=FALSE) +
+  scale_colour_manual("", 
+                      values = c("age"="green", "site"="blue", 
+                                 "both"="red")) +
+  xlab('subcohort size') +
+  ylab('relative efficiency')
+
+```
